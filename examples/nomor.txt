@@ -7,10 +7,10 @@
 #   - Nomor boleh ditulis 08xx / +62xx / 628xx — wabulk merapikan otomatis
 #   - JID grup (contoh: 120363012345678901@g.us) juga boleh ditulis apa adanya
 
-6287806361420,Kron
-089696227848,Ulil
-085138094643
-+62 878-0636-1420,Rina
+6281234567890,Syuk
+080987654321,Kron
+08780987642
++62 871-7268-4560,Rina
 
 # Contoh nomor grup (ganti dengan ID grup Anda):
 # 120363012345678901@g.us,Grup Kelas
