@@ -17,7 +17,7 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
-import { AUTH_DIR, STATUS_ACK_TUNTAS, delay, fileAda, pastikanFolder } from './utils.js';
+import { AUTH_DIR, STATUS_ACK_TUNTAS, bacaJson, delay, fileAda, normalisasiNomor, pastikanFolder, sanitizeNomor } from './utils.js';
 import { buatAgent, ringkasProxy } from './proxy.js';
 
 /**
@@ -102,9 +102,30 @@ export const ALASAN_PUTUS = Object.freeze({
   515: 'Server meminta restart koneksi. Menyambung ulang otomatis.',
 });
 
-/** True bila sudah ada sesi tersimpan di auth_info/. */
+/**
+ * Status sesi tersimpan.
+ * - `ada`       : ada file auth_info/creds.json
+ * - `terdaftar` : pairing/QR pernah berhasil (WAJIB untuk memakai session)
+ * - `nomor`     : nomor akun yang tersimpan (bila ada)
+ */
+export function statusSesi() {
+  const creds = bacaJson(path.join(AUTH_DIR, 'creds.json'), null);
+  const id = creds?.me?.id ? String(creds.me.id) : null;
+  return {
+    ada: Boolean(creds),
+    terdaftar: Boolean(creds?.registered),
+    nomor: id ? id.split('@')[0].split(':')[0] : null,
+  };
+}
+
+/** True bila ada file sesi tersimpan (belum tentu sudah terdaftar). */
 export function adaSessionTersimpan() {
-  return fileAda(path.join(AUTH_DIR, 'creds.json'));
+  return statusSesi().ada;
+}
+
+/** True bila sesi sudah terdaftar (artinya bisa dipakai menyambung). */
+export function sesiTerdaftar() {
+  return statusSesi().terdaftar;
 }
 
 /** Info singkat sesi tersimpan. */
@@ -200,6 +221,7 @@ export class KlienWhatsApp extends EventEmitter {
     this._versiBaileys = null;
     this._pesanTerkirim = new PenyimpanPesanTerkirim();
     this._retryDilayani = 0;
+    this._handshakeSelesai = false; // true setelah event 'connecting' diraih
   }
 
   /** Buat objek penampung promise "menunggu koneksi terbuka". */
@@ -253,7 +275,9 @@ export class KlienWhatsApp extends EventEmitter {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, loggerSenyap),
       },
-      browser: this.metodeTerakhir === 'pairing' ? Browsers.windows('wabulk') : Browsers.ubuntu('wabulk'),
+      // Pakai identitas browser default Baileys (Chrome di Ubuntu) — kombinasi
+      // yang paling teruji untuk QR maupun pairing code.
+      browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
@@ -277,6 +301,7 @@ export class KlienWhatsApp extends EventEmitter {
     }
 
     this.sock = makeWASocket(opsiSocket);
+    this._handshakeSelesai = false;
     this._pasangEvent(this.sock);
     return this.sock;
   }
@@ -302,10 +327,12 @@ export class KlienWhatsApp extends EventEmitter {
       }
 
       if (connection === 'connecting') {
+        this._handshakeSelesai = true; // socket siap menerima permintaan IQ
         this.onStatus({ status: 'menyambungkan', pesan: 'Menghubungkan ke server WhatsApp...' });
       }
 
       if (connection === 'open') {
+        this._handshakeSelesai = true;
         this.tersambung = true;
         this.sedangMenyambung = false;
         this._percobaanReconnect = 0;
@@ -419,14 +446,25 @@ export class KlienWhatsApp extends EventEmitter {
 
     this.sedangMenyambung = true;
 
-    const penampung = this._janjiBaru();
+    // Sisa sesi yang belum terdaftar (pernah pairing/scan tetapi gagal) dapat
+    // membuat handshake berikutnya ditolak WhatsApp. Bersihkan agar proses
+    // tautkan dimulai dari nol dengan kunci yang segar.
+    const status = statusSesi();
+    const sudahTerdaftar = status.terdaftar;
+    if (status.ada && !status.terdaftar) {
+      this.onStatus({
+        status: 'info',
+        pesan: 'Menghapus sisa sesi yang belum terdaftar agar proses tautkan bersih...',
+      });
+      hapusSessionTersimpan();
+    }
 
-    // Bila sesi sudah terdaftar, pairing code tidak diperlukan lagi.
-    const sesiAda = adaSessionTersimpan();
+    const penampung = this._janjiBaru();
 
     await this._buatSocket();
 
-    if (metode === 'pairing' && !sesiAda) {
+    // Pairing code hanya diperlukan bila sesi belum terdaftar.
+    if (metode === 'pairing' && !sudahTerdaftar) {
       await this._mintaPairingCode(this.nomorTerakhir);
     }
 
@@ -437,24 +475,93 @@ export class KlienWhatsApp extends EventEmitter {
     );
   }
 
-  /** Minta 8 digit pairing code dari WhatsApp. */
+  /**
+   * Tunggu socket siap mengirim permintaan IQ (websocket terbuka + handshake
+   * Noise selesai). Tanpa ini, `requestPairingCode` bisa gagal dengan
+   * "Connection Closed" di koneksi yang lambat.
+   */
+  async _tungguSiapKirim(timeoutMs = 25000) {
+    const mulai = Date.now();
+
+    // 1. Tunggu websocket benar-benar terbuka.
+    while (!this.sock?.ws?.isOpen) {
+      if (Date.now() - mulai > timeoutMs) {
+        throw new Error('Koneksi ke server WhatsApp belum terbuka. Periksa internet/VPN lalu coba lagi.');
+      }
+      await delay(200);
+    }
+
+    // 2. Tunggu handshake selesai (event connection: 'connecting').
+    while (!this._handshakeSelesai && Date.now() - mulai < timeoutMs) {
+      await delay(150);
+    }
+
+    return true;
+  }
+
+  /**
+   * Minta 8 digit pairing code dari WhatsApp.
+   *
+   * Syarat dari WhatsApp (lihat dokumentasi Baileys): nomor HARUS berformat
+   * internasional tanpa "+", spasi, tanda kurung, atau tanda hubung — mis.
+   * `6281234567890` (bukan `081234567890`).
+   */
   async _mintaPairingCode(nomorTelepon) {
     if (!nomorTelepon) {
       throw new Error('Nomor telepon wajib diisi untuk metode pairing code.');
     }
+
+    // Rapikan: buang 0 di depan, ubah ke kode negara (mis. 62), buang simbol.
+    const nomor = sanitizeNomor(nomorTelepon);
+    const periksa = normalisasiNomor(nomor);
+    if (!periksa.ok || periksa.adalahGrup) {
+      throw new Error(
+        `Nomor telepon tidak valid${periksa.error ? `: ${periksa.error}` : ''}. ` +
+          'Gunakan format internasional, contoh: 6281234567890',
+      );
+    }
+
     if (this.sock?.authState?.creds?.registered) {
       this.onStatus({ status: 'info', pesan: 'Sesi sudah terdaftar, pairing code tidak diperlukan.' });
       return null;
     }
 
-    // Baileys butuh socket siap sebelum permintaan kode dikirim.
-    await delay(3000);
+    await this._tungguSiapKirim();
+    await delay(600); // beri jeda singkat setelah handshake
 
-    const kode = await this.sock.requestPairingCode(nomorTelepon);
-    const kodeRapi = String(kode ?? '').replace(/[^A-Za-z0-9]/g, '');
+    let kode = null;
+    let galatTerakhir = null;
+
+    for (let percobaan = 1; percobaan <= 3 && !kode; percobaan += 1) {
+      try {
+        kode = await this.sock.requestPairingCode(nomor);
+      } catch (error) {
+        galatTerakhir = error;
+        const pesan = String(error?.message || error);
+        const bisaDiulang = /connection closed|timed? ?out|not open|websocket/i.test(pesan);
+
+        this.onStatus({
+          status: 'info',
+          pesan: `Permintaan pairing code gagal (percobaan ${percobaan}/3): ${pesan}`,
+        });
+
+        if (!bisaDiulang || percobaan === 3) break;
+        await delay(2500);
+      }
+    }
+
+    if (!kode) {
+      throw new Error(
+        `Gagal meminta pairing code: ${galatTerakhir?.message || 'tidak diketahui'}. ` +
+          `Pastikan nomor ${nomor} terdaftar di WhatsApp, koneksi internet stabil, ` +
+          'dan aplikasi WhatsApp di HP sudah versi terbaru (mendukung "Tautkan dengan nomor telepon").',
+      );
+    }
+
+    const kodeRapi = String(kode).replace(/[^A-Za-z0-9]/g, '');
     const kodeTampil = kodeRapi.length === 8 ? `${kodeRapi.slice(0, 4)}-${kodeRapi.slice(4)}` : kodeRapi;
 
-    this.onPairingCode({ kode: kodeRapi, kodeTampil });
+    this.onPairingCode({ kode: kodeRapi, kodeTampil, nomor });
     return kodeRapi;
   }
 

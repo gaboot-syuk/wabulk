@@ -93,6 +93,12 @@ Pengiriman pesan WhatsApp ke banyak nomor saat ini memerlukan pemahaman teknis t
 
 - **F1.1** Tautkan via QR Code (ditampilkan di terminal dengan `qrcode-terminal`)
 - **F1.2** Tautkan via Pairing Code 8 digit (`requestPairingCode`)
+  - Nomor telepon dinormalisasi otomatis ke format internasional tanpa simbol
+    (`08123…` → `628123…`), sesuai syarat WhatsApp
+  - Pairing hanya diminta bila `creds.registered === false` (bukan sekadar "file sesi ada")
+  - Sisa sesi yang belum terdaftar dibersihkan lebih dulu agar handshake bersih
+  - Permintaan kode menunggu websocket + handshake Noise selesai, dengan 3x percobaan
+    otomatis bila koneksi sempat tertutup
 - **F1.3** Simpan session di `auth_info/` (`useMultiFileAuthState`)
 - **F1.4** Deteksi session valid saat startup + auto-connect
 - **F1.5** Auto-reconnect saat koneksi terputus (kecuali `loggedOut` / `connectionReplaced`), maksimum 5 percobaan dengan backoff
@@ -263,8 +269,13 @@ User → CLI (ui.js)
    mengambil kembali isi pesan yang pernah dikirim. Callback ini mengembalikan **konten pesan
    (`proto.IMessage`)**, bukan objek `WAMessage` penuh — kesalahan yang membuat retry gagal
    secara senyap. Karena itu wabulk menyimpan pesan terkirim di memori selama proses berjalan.
+   (Dokumentasi Baileys juga menyarankan ini untuk "improve retry system".)
 8. **Debug opsional**: `WABULK_DEBUG=1` menaikkan level logger pino dari `silent` ke `debug`
    untuk diagnosa, tanpa menambah dependency baru.
+9. **Pairing code ≠ Mobile API**: WhatsApp membatasinya untuk menyambungkan WhatsApp Web
+   (bukan API mobile), hanya berlaku untuk nomor pribadi, dan kodenya berumur beberapa menit.
+   Karena itu UI menampilkan nomor tujuan yang sudah dinormalisasi + instruksi langkah di HP,
+   serta menawarkan "coba lagi" daripada menyerah pada kegagalan pertama.
 
 ---
 

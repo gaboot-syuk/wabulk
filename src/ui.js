@@ -32,6 +32,7 @@ import {
   buatSinyal,
   delay,
   isDibatalkan,
+  normalisasiNomor,
   parseInputManual,
   potong,
   salamWaktu,
@@ -48,7 +49,7 @@ import {
   ringkasConfig,
   saveConfig,
 } from './config.js';
-import { KlienWhatsApp, adaSessionTersimpan, hapusSessionTersimpan, infoSessionTersimpan } from './auth.js';
+import { KlienWhatsApp, adaSessionTersimpan, hapusSessionTersimpan, infoSessionTersimpan, statusSesi } from './auth.js';
 import { formatLaporan, simpanHasilDryRun, validasiDenganProgress } from './dryrun.js';
 import { formatLaporanDiagnosa, jalankanDiagnosa } from './diagnosa.js';
 import {
@@ -200,7 +201,7 @@ async function alurTautkan(dunia) {
     return;
   }
 
-  dunia.tampilkanQr = true;
+  dunia.tampilkanQr = metode === 'qr'; // pairing code tidak perlu QR
 
   if (dunia.klien.tersambung) {
     console.log(chalk.green('  ✔ Sudah tersambung ke WhatsApp.'));
@@ -217,17 +218,63 @@ async function alurTautkan(dunia) {
       const { nomor } = await tanya({
         type: 'text',
         name: 'nomor',
-        message: 'Nomor WhatsApp yang akan ditautkan (contoh: 08123456789):',
+        message: 'Nomor WhatsApp yang akan ditautkan (contoh: 6281234567890):',
         validate: (nilai) => {
-          const bersih = String(nilai ?? '').replace(/[^\d]/g, '');
-          if (bersih.length < 9) return 'Nomor terlalu pendek. Contoh: 08123456789';
-          if (bersih.length > 15) return 'Nomor terlalu panjang.';
+          // Terima 08xx / +62xx / 62xx — wabulk yang merapikan ke format internasional.
+          const hasil = normalisasiNomor(nilai);
+          if (!hasil.ok) return hasil.error || 'Nomor tidak valid';
+          if (hasil.adalahGrup) return 'Pairing code hanya untuk nomor pribadi, bukan grup.';
           return true;
         },
       });
 
+      const bersih = normalisasiNomor(nomor);
+      if (!bersih.ok) throw new Error(bersih.error);
+
+      console.log('');
+      console.log(chalk.cyan(`  Nomor yang akan ditautkan : +${bersih.nomor}`));
+      console.log(chalk.gray('  Pastikan nomor ini SAMA dengan nomor WhatsApp di HP yang akan dipakai menyetujui.'));
+      console.log('');
+
+      const { cocok } = await tanya({
+        type: 'confirm',
+        name: 'cocok',
+        message: `Benar nomor +${bersih.nomor}?`,
+        initial: true,
+      });
+      if (!cocok) {
+        console.log(chalk.gray('  Dibatalkan.\n'));
+        return;
+      }
+
       console.log(chalk.cyan('\n  Meminta kode pairing dari WhatsApp...'));
-      await dunia.klien.sambungkan({ metode: 'pairing', nomorTelepon: nomor });
+
+      // Pairing code bisa gagal karena koneksi; beri kesempatan mencoba lagi.
+      let percobaanPairing = 0;
+      for (;;) {
+        percobaanPairing += 1;
+        try {
+          await dunia.klien.sambungkan({
+            metode: 'pairing',
+            nomorTelepon: bersih.nomor,
+            timeoutMs: 300000, // beri waktu 5 menit untuk memasukkan kode di HP
+          });
+          break;
+        } catch (galat) {
+          if (isDibatalkan(galat)) throw galat;
+          console.log(chalk.red(`\n  ✖ ${galat.message}\n`));
+          if (percobaanPairing >= 3) throw galat;
+
+          const { ulang } = await tanya({
+            type: 'confirm',
+            name: 'ulang',
+            message: 'Coba lagi dengan kode baru?',
+            initial: true,
+          });
+          if (!ulang) return;
+          console.log('');
+        }
+      }
     }
 
     console.log(chalk.green('\n  ✔ Berhasil tersambung ke WhatsApp!'));
@@ -235,6 +282,7 @@ async function alurTautkan(dunia) {
   } catch (error) {
     if (isDibatalkan(error)) throw error;
     console.log(chalk.red(`\n  ✖ Gagal menyambungkan: ${error.message}\n`));
+    console.log(chalk.gray('  Bila pairing code terus gagal, gunakan metode QR Code sebagai alternatif.\n'));
   } finally {
     dunia.tampilkanQr = false;
   }
@@ -1202,13 +1250,15 @@ export async function mulaiAplikasi() {
     onQr: (qr) => {
       if (duniaRef.tampilkanQr) tampilkanQr(qr);
     },
-    onPairingCode: ({ kodeTampil }) => {
+    onPairingCode: ({ kodeTampil, nomor }) => {
       console.log('');
       console.log(chalk.bold.cyan('  KODE PAIRING ANDA:'));
       console.log(chalk.bold.white(`      ${kodeTampil}`));
       console.log('');
-      console.log(chalk.gray('  Buka WhatsApp → Setelan → Perangkat Tertaut → Tautkan dengan nomor telepon.'));
-      console.log(chalk.gray('  Masukkan kode di atas pada kolom yang tersedia.'));
+      console.log(chalk.gray(`  Nomor tujuan: +${nomor || '-'}`));
+      console.log(chalk.gray('  Buka WhatsApp di HP → Setelan → Perangkat Tertaut →'));
+      console.log(chalk.gray('  "Tautkan dengan nomor telepon", lalu masukkan kode di atas.'));
+      console.log(chalk.gray('  Kode berlaku beberapa menit — bila kedaluwarsa, ulangi menu ini.'));
       console.log('');
     },
   });
@@ -1219,8 +1269,8 @@ export async function mulaiAplikasi() {
   console.log(chalk.gray(`  ${salamWaktu()}! Folder project: ${ROOT_DIR}`));
   console.log('');
 
-  // Sambung otomatis bila session tersimpan (tanpa perlu scan ulang).
-  if (adaSessionTersimpan() && !klien.tersambung) {
+  // Sambung otomatis bila session tersimpan DAN sudah terdaftar.
+  if (adaSessionTersimpan() && statusSesi().terdaftar && !klien.tersambung) {
     klien
       .sambungkan({ metode: 'qr', timeoutMs: 60000 })
       .then(() => {

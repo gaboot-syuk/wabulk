@@ -531,6 +531,23 @@ masih terjadi:
 6. Bila masih gagal, jalankan `WABULK_DEBUG=1 npm start` dan periksa log Baileys
    (cari kata `retry` / `decrypt`)
 
+**Pairing code tidak muncul, atau kode ditolak oleh HP**
+
+WhatsApp mensyaratkan nomor berformat **internasional tanpa** `+`, `()`, `-`, dan tanpa `0` di depan
+(mis. `6281234567890`, bukan `081234567890`). wabulk sudah merapikan otomatis dan menampilkan
+nomor yang benar sebelum mengirim — **pastikan nomor itu sama** dengan nomor HP yang akan menyetujui.
+
+Langkah lanjutan bila masih gagal:
+
+1. Pastikan WhatsApp di HP adalah versi terbaru (punya menu **Setelan → Perangkat Tertaut →
+   "Tautkan dengan nomor telepon"**).
+2. Putuskan perangkat tertaut lain bila slot sudah penuh (maksimum 4 perangkat tertaut).
+3. Segera masukkan kode setelah tampil — kode berlaku beberapa menit. Bila kedaluwarsa,
+   ulangi menu Tautkan untuk meminta kode baru.
+4. Sisa sesi yang belum terdaftar (dari percobaan pairing/scan yang gagal) otomatis dibersihkan
+   wabulk sebelum pairing baru. Bila perlu, lakukan **Logout & hapus sesi** lebih dulu.
+5. Bila tetap gagal, gunakan metode **QR Code** — cara ini paling jarang bermasalah.
+
 **Pesan gagal terkirim semua**
 Pastikan sesi masih aktif (status di menu utama harus *tersambung*), nomor valid
 (coba **Mode Dry Run**), dan Anda tidak sedang dibatasi WhatsApp.

@@ -256,7 +256,7 @@ cek('log mencatat status prewarmSesi', hasilBulk.prewarmSesi === true);
 
 // --- auth: penyimpanan pesan & pramuat sesi --------------------------------
 kelompok('auth.js — penyimpanan pesan terkirim & pramuat sesi');
-const { PenyimpanPesanTerkirim, KlienWhatsApp } = await import('../src/auth.js');
+const { PenyimpanPesanTerkirim, KlienWhatsApp, statusSesi, sesiTerdaftar } = await import('../src/auth.js');
 const tunggu = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const simpanUji = new PenyimpanPesanTerkirim({ maks: 3, ttlMs: 60000 });
@@ -292,7 +292,6 @@ cek('siapkanSesi memakai assertSessions', (await klienUji.siapkanSesi('628111111
 // --- diagnosa ---------------------------------------------------------------
 kelompok('diagnosa.js — pemantauan status pengiriman (tanpa jaringan)');
 const { jalankanDiagnosa, formatLaporanDiagnosa } = await import('../src/diagnosa.js');
-
 const klienDiag = new KlienWhatsApp({});
 const idDiag = 'DIAG1';
 let jidDiag = null;
@@ -352,6 +351,67 @@ if (logDiag.ok) {
   cek('detailLog diagnosa berisi status', detailLog(isiDiag).some((baris) => baris.includes('Status akhir')));
   fs.unlinkSync(logDiag.path);
 }
+
+// --- pairing code -----------------------------------------------------------
+kelompok('auth.js — pairing code (tanpa jaringan)');
+const statusUji = statusSesi();
+cek(
+  'statusSesi mengembalikan bentuk yang benar',
+  typeof statusUji.ada === 'boolean' && typeof statusUji.terdaftar === 'boolean',
+  JSON.stringify(statusUji),
+);
+cek('sesiTerdaftar mengembalikan boolean', typeof sesiTerdaftar() === 'boolean');
+
+const klienPair = new KlienWhatsApp({});
+let nomorDiterima = null;
+let infoKode = null;
+klienPair.onPairingCode = (info) => {
+  infoKode = info;
+};
+klienPair.sock = {
+  ws: { isOpen: true },
+  authState: { creds: { registered: false } },
+  async requestPairingCode(nomor) {
+    nomorDiterima = nomor;
+    return 'ABCD1234';
+  },
+};
+klienPair._handshakeSelesai = true;
+
+await klienPair._mintaPairingCode('0812-3456-7890');
+cek('nomor pairing dirapikan ke format internasional', nomorDiterima === '6281234567890', String(nomorDiterima));
+cek('kode pairing diformat 4-4 digit', infoKode?.kodeTampil === 'ABCD-1234', String(infoKode?.kodeTampil));
+cek('nomor tujuan ikut dilaporkan ke UI', infoKode?.nomor === '6281234567890');
+
+let galatNomor = null;
+try {
+  await klienPair._mintaPairingCode('123');
+} catch (error) {
+  galatNomor = error;
+}
+cek(
+  'nomor tidak valid ditolak dengan pesan ramah',
+  Boolean(galatNomor) && /tidak valid/i.test(galatNomor.message),
+  galatNomor?.message,
+);
+
+klienPair.sock.ws.isOpen = false;
+klienPair._handshakeSelesai = false;
+let galatSiap = null;
+try {
+  await klienPair._tungguSiapKirim(300);
+} catch (error) {
+  galatSiap = error;
+}
+cek('menunggu socket siap melempar pesan jelas', Boolean(galatSiap) && /belum terbuka/i.test(galatSiap.message), galatSiap?.message);
+klienPair.sock.ws.isOpen = true;
+klienPair._handshakeSelesai = true;
+
+// Sesi sudah terdaftar → pairing code tidak diminta lagi.
+klienPair.sock.authState.creds.registered = true;
+nomorDiterima = null;
+const hasilSkip = await klienPair._mintaPairingCode('08123456789');
+cek('sesi terdaftar → pairing code dilewati', hasilSkip === null && nomorDiterima === null);
 
 // --- rangkuman -------------------------------------------------------------
 console.log('');
