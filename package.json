@@ -1,0 +1,48 @@
+{
+  "name": "wabulk",
+  "version": "1.0.0",
+  "description": "CLI interaktif untuk bulk pesan WhatsApp (berbasis Baileys). Untuk keperluan testing & pembelajaran.",
+  "type": "module",
+  "main": "bin/wabulk.js",
+  "bin": {
+    "wabulk": "bin/wabulk.js"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  },
+  "scripts": {
+    "start": "node bin/wabulk.js",
+    "check": "node --check bin/wabulk.js && node --check src/utils.js && node --check src/config.js && node --check src/logger.js && node --check src/auth.js && node --check src/template.js && node --check src/media.js && node --check src/dryrun.js && node --check src/diagnosa.js && node --check src/proxy.js && node --check src/sender.js && node --check src/ui.js",
+    "smoke": "node scripts/smoke.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "examples",
+    "install.sh",
+    "README.md",
+    "PRD.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "bulk",
+    "cli",
+    "broadcast",
+    "termux"
+  ],
+  "author": "Wabulk Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
+    "chalk": "4.1.2",
+    "https-proxy-agent": "9.1.0",
+    "ora": "9.4.1",
+    "pino": "9.14.0",
+    "prompts": "2.4.2",
+    "qrcode-terminal": "0.12.0",
+    "socks-proxy-agent": "10.1.0"
+  }
+}

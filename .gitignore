@@ -1,0 +1,33 @@
+# Dependency
+node_modules/
+
+# Session WhatsApp (JANGAN pernah di-commit: berisi kredensial akun)
+auth_info/*
+!auth_info/.gitkeep
+
+# Riwayat & log pengiriman
+logs/*
+!logs/.gitkeep
+
+# Konfigurasi lokal pengguna
+config/settings.json
+config/*.bak
+
+# File sementara
+*.log
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+.env
+.env.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# Additional
+.md
+PROMPT.md
